@@ -165,3 +165,53 @@ original_json = json.loads(original_data)
 if "ssn" in original_json:
     del original_json["ssn"]
 
+7. CloudWatch Logs
+What It Is
+CloudWatch Logs captures operational logs from AWS services.
+
+Why We Use It
+Auditability and traceability are compliance requirements. Logs allow:
+Visibility into Lambda redaction actions
+Monitoring error conditions
+Debugging malformed input
+
+How It Works Here
+Lambda logs:
+“Invoking transformation function”
+“Removing SSN field”
+
+Exceptions
+Transformation failures
+No raw PII values are logged, maintaining compliance.
+
+8. IAM (Identity and Access Management)
+What It Is
+AWS IAM manages identities and permissions for AWS services.
+
+Why We Use It
+PII redaction requires strict access control:
+Only the Lambda role should read raw data
+Users should only retrieve sanitized objects
+Access policies must enforce least privilege
+
+How It Works Here
+IAM enforces:
+Lambda execution roles
+Bucket policies denying direct access to raw data
+Access Point policies limiting who may use the endpoint
+
+Access through Object Lambda → YES
+Direct access to bucket → NO
+This aligns with NIST AC-3 (“Access Enforcement”).
+
+9. Optional: KMS (If Enabled)
+What It Is
+AWS Key Management Service manages encryption keys.
+
+Why We Use It
+When storing sensitive data, per-object encryption or bucket-level encryption may be required.
+
+How It Works Here
+If SSE-KMS is enabled:
+Lambda must be granted kms:Decrypt
+Roles must be scoped to only the relevant CMK
