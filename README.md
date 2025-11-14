@@ -88,4 +88,52 @@ Lambda transformation behavior:
 
 This satisfies strict data-minimization and de-identification requirements.
 
+Deployment Insructions (Terraform)
+1. Initialize Terraform
+terraform init
 
+2. Review variables
+Edit terraform.tfvars or pass values via CLI.
+
+3. Plan
+terraform plan
+
+4. Deploy
+terraform apply
+
+Terraform provisions:
+S3 bucket
+Standard Access Point
+Object Lambda Access Point
+Lambda redaction function
+IAM roles and permissions
+
+Testing Redaction
+Use AWS CLI or your test JSON files to verify transformation.
+Invoke Lambda Locally (Optional)
+aws lambda invoke \
+  --function-name <your-function> \
+  --payload file://test-event.json \
+  response.json
+
+Expected result:
+JSON returned without the ssn field
+Logs in CloudWatch confirm "Removing SSN field"
+
+Test Through Object Lambda
+Request object via:
+aws s3api get-object \
+  --bucket <bucket> \
+  --key <object> \
+  --endpoint-url <object-lambda-ap-endpoint> \
+  output.json
+
+Cleanup
+terraform destroy
+
+This removes:
+Buckets
+Access points
+Lambda function
+IAM roles
+No residual infrastructure or costs remain.
