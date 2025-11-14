@@ -80,3 +80,12 @@ Example input (from `test-event.json`):
   "ssn": "123-45-6789"
 }
 
+Lambda transformation behavior:
+
+"ssn" field is removed entirely
+
+"name" and "email" are preserved
+
+This satisfies strict data-minimization and de-identification requirements.
+
+
