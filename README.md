@@ -1,139 +1,86 @@
-# AWS S3 Object Lambda – PII Redaction (Compliance-Focused Architecture)
+# AWS S3 Object Lambda – PII Redaction Architecture
 
-This project implements a **compliance-driven PII redaction pipeline** using **Amazon S3 Object Lambda**, **AWS Lambda**, and **Terraform**. The system intercepts `GetObject` requests at an S3 Object Lambda Access Point and **removes sensitive data (PII)**—such as Social Security Numbers—before returning the object to the requester.
+## Project Overview
 
-The design aligns with **GDPR**, **PCI DSS**, **NIST 800-53**, and **HIPAA Security Rule** requirements for data minimization, de-identification, and controlled disclosure.
+This project explores a data-security architecture for protecting sensitive information stored in Amazon S3 by transforming object content before it is returned to a requester.
 
----
+The design uses **Amazon S3 Object Lambda** and **AWS Lambda** to introduce a transformation layer between stored data and the consumer. Sensitive fields can be removed or redacted at request time while the original object remains unchanged.
 
-## 🔍 Executive Summary
+The repository focuses on the **security architecture, requirements, risks, compliance considerations, and redaction logic** associated with this pattern.
 
-Organizations often store structured or semi-structured data in S3 that includes Personally Identifiable Information (PII). Granting direct access to these objects increases compliance risk, especially when users only need **partial, sanitized, or de-identified versions**.
-
-This project demonstrates a **policy-enforced, serverless redaction pattern**:
-
-- No duplicate data storage  
-- No need for batch ETL pipelines  
-- Redaction happens **on demand**, per request  
-- PII is **removed** before delivery  
-- Least-privilege IAM is enforced  
-- Fully deployable via **Terraform**  
+It does not represent a complete production deployment.
 
 ---
 
-## 🧩 Architecture Overview
+## Business Problem
 
-### **Flow Summary**
-1. A client issues a `GetObject` request through an **S3 Object Lambda Access Point**.  
-2. S3 invokes a **Lambda function** with the object payload.  
-3. Lambda loads the original JSON, identifies PII fields, and **removes the `ssn` field**.  
-4. The sanitized JSON is returned to S3 Object Lambda.  
-5. S3 returns the redacted object to the client.
+Organizations frequently store structured data containing Personally Identifiable Information (PII) in Amazon S3.
 
-### **Key Components**
-- **S3 Bucket** – Stores original data (with PII).  
-- **S3 Standard Access Point** – Controls which clients may access the data.  
-- **S3 Object Lambda Access Point** – Intercepts requests for transformation.  
-- **Lambda Redaction Function** – Removes PII fields (`ssn`).  
-- **IAM Roles & Policies** – Enforce least-privilege access.  
-- **Terraform** – Deploys infrastructure consistently and repeatably.  
+Different consumers may require access to the same dataset without requiring access to every sensitive field.
 
----
+Maintaining separate sanitized copies can introduce:
 
-## 🛡 Compliance Motivation
+- Duplicate data
+- Additional storage
+- Synchronization problems
+- Data lifecycle complexity
+- Increased risk of inconsistent protection
 
-This project demonstrates alignment with:
+The architectural question is:
 
-### **GDPR**
-- Data Minimization (Art. 5(1)(c))  
-- Purpose Limitation (Art. 5(1)(b))  
-- Right to Access (Art. 15) with redaction  
-- Pseudonymization & De-identification techniques  
-
-### **PCI DSS 3.2.1**
-- Requirement 3.4 – Render sensitive data unreadable  
-- Requirement 7 – Restrict access to cardholder data by business need  
-- Requirement 10 – Logging and audit trails  
-
-### **HIPAA Security Rule**
-- §164.312(a) – Access Control  
-- §164.312(c) – Integrity Controls  
-- §164.306 – General Data Protection Standards  
-
-### **NIST 800-53 Rev 5**
-- AC-3 – Access Enforcement  
-- SC-28 – Protection of Information at Rest  
-- AU-2 – Audit Events  
-- SI-12 – Information Sanitization  
+**How can an organization provide a sanitized view of an S3 object without modifying or duplicating the authoritative source object?**
 
 ---
 
-## 🧪 Lambda Redaction Logic
+## Architecture Approach
 
-This project uses **PII removal**, not masking.
+The proposed architecture introduces a transformation layer using S3 Object Lambda.
 
-Example input (from `test-event.json`):
+Conceptually:
+
+**Requester → S3 Object Lambda Access Point → Lambda Transformation → S3 Object → Sanitized Response**
+
+The original object remains the authoritative data source.
+
+When a consumer requests data through the controlled access path, Lambda transforms the content before it is returned.
+
+This separates:
+
+**Data at rest**
+
+from
+
+**Data presented to the consumer**
+
+and allows disclosure controls to be applied during retrieval.
+
+---
+
+## Conceptual Request Flow
+
+1. Sensitive structured data is stored in Amazon S3.
+2. A consumer requests an object through an S3 Object Lambda access path.
+3. S3 Object Lambda invokes a Lambda transformation function.
+4. The transformation logic evaluates the structured data.
+5. Defined sensitive fields are removed or redacted.
+6. The transformed content is returned to the requester.
+7. The original S3 object remains unchanged.
+
+This is the intended architecture pattern and should not be interpreted as evidence that every component has been deployed as a production system.
+
+---
+
+## Redaction Strategy
+
+The architecture demonstrates field-level protection of structured JSON data.
+
+Example source object:
+
 ```json
 {
+  "customer_id": "123456",
   "name": "Jane Doe",
   "email": "jane.doe@example.com",
-  "ssn": "123-45-6789"
+  "ssn": "123-45-6789",
+  "account_balance": 10000
 }
-
-Lambda transformation behavior:
-
-"ssn" field is removed entirely
-
-"name" and "email" are preserved
-
-This satisfies strict data-minimization and de-identification requirements.
-
-Deployment Insructions (Terraform)
-1. Initialize Terraform
-terraform init
-
-2. Review variables
-Edit terraform.tfvars or pass values via CLI.
-
-3. Plan
-terraform plan
-
-4. Deploy
-terraform apply
-
-Terraform provisions:
-S3 bucket
-Standard Access Point
-Object Lambda Access Point
-Lambda redaction function
-IAM roles and permissions
-
-Testing Redaction
-Use AWS CLI or your test JSON files to verify transformation.
-Invoke Lambda Locally (Optional)
-aws lambda invoke \
-  --function-name <your-function> \
-  --payload file://test-event.json \
-  response.json
-
-Expected result:
-JSON returned without the ssn field
-Logs in CloudWatch confirm "Removing SSN field"
-
-Test Through Object Lambda
-Request object via:
-aws s3api get-object \
-  --bucket <bucket> \
-  --key <object> \
-  --endpoint-url <object-lambda-ap-endpoint> \
-  output.json
-
-Cleanup
-terraform destroy
-
-This removes:
-Buckets
-Access points
-Lambda function
-IAM roles
-No residual infrastructure or costs remain.
