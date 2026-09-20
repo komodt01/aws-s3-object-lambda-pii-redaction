@@ -1,203 +1,155 @@
-# Cost Considerations – AWS S3 Object Lambda PII Redaction Architecture
+# Lessons Learned – AWS S3 Object Lambda PII Redaction
 
 ## Purpose
 
-This document identifies the primary cost considerations associated with implementing the proposed request-time PII redaction architecture.
+This document captures practical lessons from working through the S3 Object Lambda PII redaction scenario.
 
-The architecture uses managed and serverless AWS services conceptually, which can reduce the need for continuously running compute infrastructure.
-
-Actual cost depends on workload volume, object size, transformation complexity, logging, monitoring, and the final implementation.
+The most significant challenge was not the redaction logic itself. It was understanding how identity, permissions, and the S3 Object Lambda request path interact.
 
 ---
 
-## 1. Request-Time Processing
+## 1. IAM Permissions Were the Primary Troubleshooting Challenge
 
-Request-time transformation introduces processing each time applicable data is retrieved.
+An initial assumption was that the Lambda execution role already had sufficient permissions to retrieve the required S3 object.
 
-Potential cost drivers include:
+Testing showed that the permissions were not sufficient for the intended request path.
 
-- Number of object requests
-- Amount of data processed
-- Lambda invocation volume
-- Lambda execution duration
-- Object size
-- Transformation complexity
+The issue was resolved by manually creating and attaching the required IAM policy granting the necessary `s3:GetObject` access.
 
-For lightweight structured-data transformations, processing requirements may be relatively small.
+### Lesson
 
-However, cost should be evaluated using representative production workloads rather than assuming request-time transformation is always the least expensive approach.
+A Lambda execution role existing does not mean that the function has all permissions required by the workload.
 
----
+Permissions must be evaluated against:
 
-## 2. Amazon S3
+- The specific AWS API action
+- The target resource
+- The role performing the action
+- S3 and access-point policies involved in the request path
 
-Amazon S3 costs can include:
-
-- Data storage
-- API requests
-- Data transfer where applicable
-- Access-point usage
-- Other enabled S3 capabilities
-
-One potential advantage of the architecture is reducing the need to maintain a separate sanitized copy of every source object.
-
-Instead of maintaining:
-
-**Original dataset + Sanitized dataset**
-
-the architecture can potentially use:
-
-**Original dataset + Request-time transformed representation**
-
-This may reduce duplicate storage and synchronization requirements.
-
-Whether this produces meaningful cost savings depends on dataset size, request frequency, and the alternative architecture being considered.
+This reinforced the importance of tracing authorization through the complete architecture rather than looking at IAM roles in isolation.
 
 ---
 
-## 3. AWS Lambda
+## 2. Access Paths Matter as Much as Transformation Logic
 
-Lambda introduces execution costs for transformation requests.
+The initial focus of the project was PII transformation.
 
-Primary cost factors include:
+Troubleshooting demonstrated that the larger security problem includes how the function reaches the source object and how consumers reach the transformed representation.
 
-- Number of invocations
-- Execution duration
-- Memory allocation
-- Processing complexity
+### Lesson
 
-Simple field removal from relatively small JSON objects may require limited processing.
+A redaction function is only one part of the security architecture.
 
-More complex transformations or larger objects can increase execution time and cost.
+The complete path must be considered:
 
----
+**Consumer → Object Lambda Access Path → Lambda Transformation → Source Object → Transformed Response**
 
-## 4. Logging and Monitoring
-
-Production implementations should include appropriate logging and monitoring.
-
-Potential cost drivers include:
-
-- Log ingestion
-- Log storage
-- Metrics
-- Alarms
-- Retention periods
-- Security monitoring
-
-Logging should provide sufficient operational and security visibility without unnecessarily recording large payloads.
-
-Sensitive values should not be written to logs.
-
-Appropriate retention policies can help balance audit requirements with storage cost.
+Each interaction introduces authorization and failure considerations.
 
 ---
 
-## 5. Encryption and AWS KMS
+## 3. AWS CLI Responses Were Important Troubleshooting Evidence
 
-If SSE-KMS is selected for source-data encryption, AWS KMS usage may introduce additional costs associated with cryptographic operations and key management.
+Troubleshooting included reviewing responses from AWS CLI operations such as:
 
-The decision between SSE-S3 and SSE-KMS should therefore consider both:
+- `aws lambda update-function-code`
+- `aws s3api get-object`
 
-- Security and governance requirements
-- Operational cost
+These responses helped identify where the workflow was failing.
 
-Cost alone should not determine the encryption mechanism for sensitive information.
+### Lesson
 
----
+When troubleshooting cloud services, start with the actual API or CLI response rather than assuming the problem is in application logic.
 
-## 6. Data Transfer
+Errors can originate from:
 
-Depending on the consumers and architecture, data-transfer charges may also need to be considered.
+- IAM
+- Resource policies
+- Service configuration
+- Request parameters
+- Application logic
 
-Relevant factors can include:
-
-- AWS Region
-- Consumer location
-- Cross-Region access
-- Internet data transfer
-- Other connected AWS services
-
-A production cost model should include the actual expected data flow rather than only Lambda and S3 processing costs.
+Separating these failure domains makes troubleshooting more systematic.
 
 ---
 
-## 7. Request-Time Transformation vs. Sanitized Copies
+## 4. Least Privilege Requires Testing
 
-One of the important architecture tradeoffs is the cost relationship between dynamic transformation and maintaining sanitized datasets.
+The permissions issue reinforced an important distinction:
 
-### Request-Time Transformation
+**Least privilege does not mean simply granting fewer permissions.**
 
-Potential advantages:
+It means granting the minimum permissions required for the intended workflow while verifying that unauthorized operations remain unavailable.
 
-- Reduced duplicate storage
-- No batch sanitization process
-- Centralized transformation logic
-- Transformation occurs only when data is requested
+### Lesson
 
-Potential cost factors:
+IAM design should be tested from both directions:
 
-- Processing on each request
-- Additional request-path services
-- Monitoring
-- Potentially higher latency
+- Does the intended operation succeed?
+- Are unintended operations denied?
 
-### Pre-Generated Sanitized Dataset
-
-Potential advantages:
-
-- Transformation occurs before consumption
-- Consumer retrieval may be simpler
-- Useful for frequently accessed static datasets
-
-Potential cost factors:
-
-- Additional storage
-- ETL or transformation processing
-- Synchronization
-- Data lifecycle management
-- Additional security controls
-
-Neither approach is universally less expensive.
-
-The appropriate architecture depends on workload characteristics.
+A policy should not be considered correct simply because it appears restrictive.
 
 ---
 
-## 8. Infrastructure Automation
+## 5. Redaction and Access Control Solve Different Problems
 
-Infrastructure as Code can help organizations consistently create and remove development and test resources.
+Transformation removes sensitive information from a representation of the data.
 
-Terraform is one possible implementation approach.
+IAM determines who can access the underlying resources.
 
-However, Terraform configuration is not present in the current repository and should not be considered an implemented cost-control mechanism for this project.
+### Lesson
 
-If Infrastructure as Code is added later, automated teardown and lifecycle management could help reduce unnecessary resource consumption.
+Redaction cannot compensate for an access-control path that allows the same consumer to retrieve the original sensitive object directly.
 
----
+A production design therefore needs both:
 
-## 9. Cost Monitoring
-
-A production implementation should consider:
-
-- AWS cost monitoring
-- Budget thresholds
-- Usage alerts
-- Request-volume trends
-- Lambda execution trends
-- Logging growth
-- Data-transfer patterns
-
-Unexpected increases in cost can also provide operational signals that usage patterns have changed.
+**Controlled access + Controlled transformation**
 
 ---
 
-## Architecture Cost Principle
+## 6. Failure Behavior Is a Security Decision
 
-The economic value of request-time transformation should not be evaluated solely by the cost of a Lambda invocation.
+Working through the request path highlighted another architectural concern: what should happen when transformation fails?
 
-The complete comparison should consider:
+Returning the original object would preserve availability but could expose sensitive information.
 
-**Storage + Requests + Transformation + Logging + Monitoring + Encryption + Data Transfer + Operational Complexity**
+### Lesson
 
-Request-time redaction may reduce the cost and complexity of maintaining duplicate sanitized datasets, but that benefit must be evaluated against the additional processing introduced into every applicable retrieval request.
+For sensitive-data transformation, failure handling must be explicitly designed.
+
+Where the consumer is not authorized for the original information, the safer architecture is to fail the request rather than silently return the unredacted source object.
+
+---
+
+## 7. Infrastructure Documentation Must Match Implementation
+
+The project documentation originally described Terraform-based deployment.
+
+The current repository does not contain Terraform configuration.
+
+### Lesson
+
+Architecture documentation should distinguish between:
+
+- What was tested manually
+- What is part of the proposed architecture
+- What is planned
+- What is actually implemented in the repository
+
+This distinction improves technical credibility and prevents design intent from being mistaken for implementation evidence.
+
+---
+
+## Key Takeaway
+
+The most important lesson from this project was that protecting sensitive data is not simply a matter of writing redaction logic.
+
+The architecture depends on the interaction between:
+
+**IAM + S3 access paths + Lambda transformation + failure handling + monitoring + governance**
+
+The hands-on permissions troubleshooting reinforced a broader security architecture principle:
+
+**A security control must be evaluated within the complete request and authorization path, not in isolation.**
