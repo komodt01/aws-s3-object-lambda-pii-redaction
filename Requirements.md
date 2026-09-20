@@ -1,156 +1,312 @@
-# Requirements – AWS S3 Object Lambda PII Redaction
+# Requirements – AWS S3 Object Lambda PII Redaction Architecture
 
-This document defines the **business**, **functional**, **security**, **compliance**, and **non-functional** requirements for the AWS S3 Object Lambda PII Redaction solution.  
-The project implements on-demand PII removal for structured JSON data stored in Amazon S3, enforced through a serverless transformation pipeline.
+## Purpose
+
+This document defines the business, functional, security, compliance, and non-functional requirements for the proposed AWS S3 Object Lambda PII redaction architecture.
+
+These requirements describe the intended behavior and security characteristics of a production implementation.
+
+They should not be interpreted as evidence that every requirement has been implemented in the current repository.
 
 ---
 
 ## 1. Business Requirements
 
-### **BR1 – Controlled PII Disclosure**
-The system must prevent exposure of sensitive data fields (e.g., SSN) to users who do not require full visibility of the original data object.
+### BR1 – Controlled PII Disclosure
 
-### **BR2 – No Data Duplication**
-The organization must avoid duplicating S3 objects to maintain sanitized and unsanitized versions. All redaction must occur dynamically.
+The architecture must support limiting disclosure of sensitive fields to consumers that do not require access to the complete source record.
 
-### **BR3 – Low Operational Overhead**
-The solution must operate without dedicated servers, databases, scheduled jobs, ETL pipelines, or additional manual intervention.
+### BR2 – Data Minimization
 
-### **BR4 – Auditable and Explainable**
-Redaction decisions must be fully observable through logs to support compliance audits and investigations.
+Consumers should receive only the information required for their approved business purpose.
 
-### **BR5 – On-Demand Access**
-Clients must retrieve sanitized data via a standard S3 `GetObject` workflow with minimal change to their existing integration.
+### BR3 – Preserve the Authoritative Source
+
+Transformation must not require modification of the authoritative source object solely to produce a sanitized consumer view.
+
+### BR4 – Minimize Data Duplication
+
+The architecture should reduce the need to maintain separate sanitized copies of source datasets when request-time transformation is appropriate.
+
+### BR5 – Low Operational Overhead
+
+The solution should favor managed and serverless AWS services where appropriate to reduce infrastructure-management overhead.
+
+### BR6 – Auditable Operation
+
+Security-relevant transformation activity, failures, and access events should provide sufficient operational visibility for monitoring, investigation, and audit requirements.
 
 ---
 
 ## 2. Functional Requirements
 
-### **FR1 – PII Field Removal**
-The Lambda function must identify PII fields and *remove* them before returning the response through S3 Object Lambda. Initial scope includes:
+### FR1 – Sensitive Field Removal
 
-- `ssn` (Social Security Number)
+The transformation logic must be capable of identifying defined sensitive fields and removing them from the consumer-facing representation.
 
-### **FR2 – JSON-based Transformation**
-The transformation function must support structured objects in JSON format.
+The initial example used by this architecture is:
 
-### **FR3 – No Modification of Original Data**
-Original data stored in the S3 bucket must remain unchanged.
+- `ssn`
 
-### **FR4 – S3 Object Lambda Invocation**
-All transformations must be triggered transparently when a user retrieves an object from the Object Lambda Access Point.
+### FR2 – Structured Data Transformation
 
-### **FR5 – Error Handling**
-If the Lambda function fails, S3 must return client-visible error messages with CloudWatch logs for troubleshooting.
+The initial transformation pattern must support structured JSON objects.
 
-### **FR6 – IAM-Based Access Control**
-Access must be restricted through IAM policies and S3 Access Point policies.
+### FR3 – Source Data Preservation
 
-### **FR7 – Terraform Deployment**
-Infrastructure (S3, Access Points, Lambda, IAM) must be deployable using Terraform for repeatability.
+The transformation process must not modify the original source object when generating the consumer-facing representation.
+
+### FR4 – Request-Time Transformation
+
+Transformation should occur during the approved object-retrieval path rather than requiring a separate batch sanitization process.
+
+### FR5 – Error Handling
+
+Transformation failures must be handled explicitly.
+
+A failure must not unintentionally expose the original sensitive content to a consumer that is not authorized to receive it.
+
+### FR6 – Authorization
+
+Access to source data, access points, transformation services, and consumer-facing data must be controlled through appropriate AWS authorization mechanisms.
+
+### FR7 – Infrastructure Automation
+
+A production implementation should support repeatable Infrastructure-as-Code deployment.
+
+Terraform is one potential implementation approach.
+
+Terraform configuration is not present in the current repository and is therefore not represented as a completed project capability.
 
 ---
 
 ## 3. Security Requirements
 
-### **SR1 – PII Sanitization**
-PII fields must be permanently removed from the response payload before returning to the user.
+### SR1 – PII Protection
 
-### **SR2 – IAM Least Privilege**
-IAM roles for Lambda and Access Points must grant only the minimum required permissions to perform:
+Sensitive fields identified by the approved data policy must not be included in responses delivered to consumers that are not authorized to receive those fields.
 
-- S3 GetObject  
-- PutObject (if logs or artifacts were implemented)  
-- CloudWatch logging  
-- No administrative or wildcard permissions
+### SR2 – Least Privilege
 
-### **SR3 – S3 Access Path Enforcement**
-Users must not have direct access to the underlying S3 bucket; all GetObject requests must flow through the Object Lambda Access Point.
+IAM permissions must be limited to the actions and resources required by each component.
 
-### **SR4 – Encrypted Data Paths**
-Traffic between S3, Object Lambda, and Lambda must be encrypted (TLS in transit, SSE-S3 or SSE-KMS at rest).
+Broad administrative permissions and unnecessary wildcard permissions should be avoided.
 
-### **SR5 – Lambda Hardening**
-The Lambda execution environment must follow AWS security best practices:
+### SR3 – Access-Path Enforcement
 
-- No inline secrets  
-- Logging enabled  
-- Limited network exposure  
-- Managed runtime  
+Consumers intended to receive sanitized data must not be able to bypass the transformation path and retrieve the underlying sensitive object through an unauthorized alternate path.
 
-### **SR6 – Logging/Auditability**
-Lambda must log:
+### SR4 – Encryption in Transit
 
-- Invocation events  
-- PII removal actions  
-- Errors and exceptions  
+Communications involving sensitive information must use encrypted transport.
 
-Logs must be written to CloudWatch.
+### SR5 – Encryption at Rest
+
+Sensitive source objects must use an appropriate S3 server-side encryption mechanism based on organizational security requirements.
+
+Potential options include:
+
+- SSE-S3
+- SSE-KMS
+
+### SR6 – Lambda Security
+
+A production Lambda implementation must follow appropriate security practices, including:
+
+- No hard-coded credentials or secrets
+- Least-privilege execution permissions
+- Supported runtime
+- Controlled dependencies
+- Appropriate logging
+- Input validation
+- Error handling
+
+### SR7 – Secure Failure Behavior
+
+Transformation failures must not default to returning unmodified sensitive content to unauthorized consumers.
+
+The production design should define appropriate fail-closed behavior based on the data classification and business use case.
+
+### SR8 – Logging
+
+Operational logging should provide visibility into:
+
+- Transformation invocation
+- Successful transformation
+- Transformation failure
+- Invalid input
+- Authorization or processing errors
+
+Sensitive values must not be written to logs.
+
+### SR9 – Data Classification
+
+The organization must define which fields are sensitive and which consumer populations may receive them.
+
+Transformation logic should enforce an approved data policy rather than independently determining organizational classification requirements.
 
 ---
 
 ## 4. Compliance Requirements
 
-### **GDPR**
-- **Art. 5(1)(c)** – Data Minimization  
-- **Art. 5(1)(b)** – Purpose Limitation  
-- **Art. 15** – Subject Access Requests with redaction  
-- **Art. 25** – Data Protection by Design  
+The architecture can support controls associated with privacy and information-security frameworks.
 
-### **PCI DSS 3.2.1**
-- **Req. 3.4** – Render sensitive data unreadable  
-- **Req. 7** – Restrict access by business need-to-know  
-- **Req. 10** – Track access and audit logs  
+Relevant control areas include:
 
-### **HIPAA Security Rule**
-- **164.312(a)** – Access Controls  
-- **164.312(c)** – Integrity Controls  
-- **164.306** – General Security Requirements  
+- Data minimization
+- Purpose limitation
+- Access enforcement
+- Least privilege
+- Protection of sensitive information
+- Auditability
+- Information sanitization
+- Security by design
 
-### **NIST SP 800-53 Rev 5**
-- **AC-3** – Access Enforcement  
-- **SC-28** – Protect Information at Rest  
-- **SI-12** – Information Sanitization  
-- **AU-2** – Audit Events  
+Potentially relevant frameworks include:
+
+### GDPR
+
+Relevant principles and requirements may include:
+
+- Data minimization
+- Purpose limitation
+- Data protection by design and by default
+- Appropriate protection of personal data
+
+### PCI DSS
+
+Relevant control areas may include:
+
+- Protection of stored account data
+- Restriction of access by business need
+- Logging and monitoring
+- Protection of sensitive authentication data where applicable
+
+### HIPAA Security Rule
+
+Relevant control areas may include:
+
+- Access control
+- Information protection
+- Integrity
+- Audit controls
+
+Applicability depends on whether the information and organization are subject to HIPAA requirements.
+
+### NIST SP 800-53
+
+Potentially relevant control families include:
+
+- Access Control
+- Audit and Accountability
+- System and Communications Protection
+- System and Information Integrity
+
+The architecture does not establish compliance with any framework by itself.
+
+Compliance depends on the complete implementation, applicable data, organizational processes, control effectiveness, and regulatory scope.
 
 ---
 
 ## 5. Non-Functional Requirements
 
-### **NFR1 – Scalability**
-The system must scale automatically with the volume of requests, leveraging the serverless nature of S3 and Lambda.
+### NFR1 – Scalability
 
-### **NFR2 – Performance**
-Transformations should complete within the default Lambda timeout and maintain low latency (single-digit milliseconds to low hundreds of milliseconds).
+The architecture should support changes in request volume without requiring manually managed server infrastructure for the transformation layer.
 
-### **NFR3 – High Availability**
-AWS-managed components (S3, Lambda) must provide high resiliency with no single points of failure.
+### NFR2 – Performance
 
-### **NFR4 – Cost Efficiency**
-The architecture must incur charges only for:
+Transformation latency must be measured and evaluated against application requirements.
 
-- Lambda invocations  
-- S3 requests  
-- CloudWatch logs  
+No fixed latency target is assumed by this architecture.
 
-No long-running compute resources are allowed.
+### NFR3 – Availability
 
-### **NFR5 – Observability**
-CloudWatch metrics and logs must be used to monitor:
+The transformation path must have availability and failure-handling requirements appropriate to the business process consuming the data.
 
-- Redaction events  
-- Invocation errors  
-- Latency  
-- Request counts  
+### NFR4 – Cost Efficiency
+
+The architecture should evaluate the cost of request-time transformation against alternatives such as:
+
+- Maintaining sanitized datasets
+- Batch transformation
+- ETL processing
+- Application-layer redaction
+
+### NFR5 – Observability
+
+Production monitoring should provide visibility into:
+
+- Request volume
+- Transformation success
+- Transformation failure
+- Processing latency
+- Errors
+- Service health
+
+### NFR6 – Maintainability
+
+Transformation rules must be maintainable as:
+
+- Data schemas change
+- New sensitive fields are identified
+- Consumer requirements change
+- Data-classification policies evolve
 
 ---
 
-## 6. Success Criteria
+## 6. Governance Requirements
 
-- All `ssn` fields are removed from responses.  
-- Users cannot retrieve raw, unredacted S3 objects directly.  
-- Infrastructure deploys cleanly using Terraform.  
-- Lambda logs show clear redaction actions.  
-- Access paths satisfy least privilege.  
-- The design meets GDPR, PCI, HIPAA, and NIST minimization guidelines.
+### GR1 – Policy Ownership
 
+The organization must define ownership for data-classification and disclosure policies.
+
+### GR2 – Transformation Changes
+
+Changes to transformation rules should follow an appropriate review and approval process.
+
+### GR3 – Exceptions
+
+Exceptions allowing access to unredacted information should be explicitly authorized and governed.
+
+### GR4 – Testing
+
+Transformation behavior should be tested against:
+
+- Expected input
+- Missing fields
+- Additional fields
+- Malformed JSON
+- Schema changes
+- Transformation failures
+- Unauthorized access attempts
+
+---
+
+## 7. Success Criteria
+
+A production implementation should demonstrate that:
+
+- Defined sensitive fields are excluded from unauthorized consumer responses.
+- Consumers cannot bypass the approved transformation path to obtain sensitive source data without authorization.
+- Original source objects remain unchanged by the transformation process.
+- IAM permissions follow least privilege.
+- Transformation failures do not expose sensitive source content.
+- Logs provide operational visibility without recording sensitive values.
+- Transformation rules reflect approved data-classification requirements.
+- Performance and availability satisfy the consuming application's requirements.
+- Security controls are tested and their effectiveness can be demonstrated.
+
+---
+
+## Architecture Requirement Principle
+
+The core requirement is not simply:
+
+**Remove an `ssn` field.**
+
+The broader requirement is:
+
+**Ensure that each consumer receives only the information they are authorized and required to receive while preserving appropriate control over the authoritative source data.**
+
+S3 Object Lambda and Lambda provide one architectural pattern for enforcing that requirement.
