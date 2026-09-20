@@ -1,152 +1,371 @@
-# Security Requirements – AWS S3 Object Lambda PII Redaction
+# Security Requirements – AWS S3 Object Lambda PII Redaction Architecture
 
-This document defines the security requirements for the AWS S3 Object Lambda PII Redaction solution. The goal is to ensure that sensitive data is protected, access is controlled, and the architecture aligns with security best practices and relevant compliance expectations.
+## Purpose
+
+This document defines the security requirements for a production implementation of the proposed AWS S3 Object Lambda PII redaction architecture.
+
+The requirements describe the intended security posture of the architecture.
+
+They should not be interpreted as evidence that every control has been implemented in the current repository.
 
 ---
 
 ## 1. Security Objectives
 
-- **SO1 – Prevent Unauthorized Exposure of PII**  
-  Ensure that sensitive data (e.g., SSN) is not exposed to users who do not require full access.
+### SO1 – Prevent Unauthorized Disclosure
 
-- **SO2 – Enforce Data Minimization**  
-  Only provide the minimum necessary data to the requester, removing PII fields from responses.
+Sensitive information must not be disclosed to consumers that are not authorized to receive it.
 
-- **SO3 – Maintain Integrity of Original Data**  
-  Ensure that original S3 objects remain unchanged, with redaction applied only to responses.
+### SO2 – Enforce Data Minimization
 
-- **SO4 – Enable Audit and Traceability**  
-  Provide sufficient logging to trace redaction operations and access patterns.
+Consumers should receive only the information required for their approved business purpose.
+
+### SO3 – Preserve Source Data Integrity
+
+Request-time transformation must not modify the authoritative source object solely to produce a sanitized consumer representation.
+
+### SO4 – Enforce Authorized Access Paths
+
+Consumers intended to receive transformed information must not be able to bypass the approved transformation path and retrieve sensitive source data through an unauthorized alternate path.
+
+### SO5 – Provide Auditability
+
+Security-relevant access, transformation activity, failures, and administrative changes should provide sufficient visibility for monitoring, investigation, and audit requirements.
+
+### SO6 – Fail Securely
+
+Transformation failures must not result in unauthorized disclosure of the original sensitive content.
 
 ---
 
-## 2. Identity & Access Management (IAM)
+## 2. Identity and Access Management
 
-### **IAM-1 – Least Privilege for Lambda Role**
-The Lambda execution role must grant only the minimal permissions required:
+### IAM-1 – Least-Privilege Lambda Role
 
-- `s3:GetObject` on the source bucket (scoped to relevant prefixes/objects where possible)
-- `logs:CreateLogGroup`, `logs:CreateLogStream`, and `logs:PutLogEvents` for CloudWatch logging
+The Lambda execution role must receive only the permissions required to perform the approved transformation workflow.
 
-No wildcard (`"*"` on `"*"`) administrative permissions are allowed.
+Permissions should be scoped to the required:
 
-### **IAM-2 – Restricted S3 Access for Callers**
-Callers must **not** have direct access to the underlying S3 bucket. They should only access data through:
+- AWS services
+- S3 resources
+- Object prefixes where appropriate
+- Logging resources
+- Cryptographic keys when required
 
-- S3 Access Point and  
-- S3 Object Lambda Access Point
+Broad administrative permissions should not be used.
 
-Bucket policies and IAM policies must enforce this restriction.
+### IAM-2 – Consumer Access
 
-### **IAM-3 – Scoped Access Point Policies**
-Both the standard Access Point and Object Lambda Access Point must:
+Consumers authorized only for sanitized data must not also receive permissions that allow unauthorized retrieval of the underlying sensitive source object.
 
-- Allow access only from approved IAM principals or roles
-- Restrict access to intended prefixes/objects
-- Deny direct bucket-level access where appropriate
+### IAM-3 – Access-Point Policies
 
-### **IAM-4 – No Inline Secrets**
-The Lambda function code must not embed credentials, secrets, or API keys. All authentication must rely on the Lambda execution role.
+Access-point policies should restrict usage to approved principals and approved data resources.
+
+Policies should reflect the intended separation between:
+
+- Privileged raw-data access
+- Transformed consumer access
+
+### IAM-4 – No Embedded Credentials
+
+Transformation code must not contain:
+
+- AWS access keys
+- Passwords
+- API keys
+- Long-lived credentials
+- Other embedded secrets
+
+AWS service authentication should use appropriately scoped IAM roles.
+
+### IAM-5 – Privileged Access
+
+Any identity permitted to retrieve the original sensitive object should be treated as privileged access and governed accordingly.
 
 ---
 
 ## 3. Data Protection
 
-### **DP-1 – PII Removal in Responses**
-The redaction function must remove PII fields (e.g., `ssn`) from the response payload before returning it to the client. Original objects in S3 remain unchanged.
+### DP-1 – Sensitive Field Removal
 
-### **DP-2 – Encryption at Rest**
-The S3 bucket must use server-side encryption:
+The transformation logic must remove fields classified as inappropriate for the requesting consumer.
 
-- SSE-S3 or SSE-KMS
+The project's initial example uses the `ssn` field.
 
-If KMS is used, the IAM role must be granted only necessary KMS permissions.
+### DP-2 – Source Object Preservation
 
-### **DP-3 – Encryption in Transit**
-All communication:
+Transformation must operate on the consumer-facing representation without modifying the original source object.
 
-- Between clients and S3  
-- Between S3, Object Lambda, and Lambda  
+### DP-3 – Encryption at Rest
 
-must use TLS (HTTPS). Access over HTTP must be blocked or redirected to HTTPS.
+Sensitive source objects must use an appropriate S3 server-side encryption mechanism.
 
-### **DP-4 – No Local Persistence**
-The Lambda function must not persist PII to temporary external storage (e.g., RDS, DynamoDB, SQS, external services) as part of the transformation.
+Potential options include:
 
----
+- SSE-S3
+- SSE-KMS
 
-## 4. Logging & Monitoring
+The selected mechanism should reflect organizational data-classification and key-management requirements.
 
-### **LM-1 – CloudWatch Logging**
-Lambda must log:
+### DP-4 – Encryption in Transit
 
-- Invocation events and request context (non-sensitive metadata)
-- Redaction actions (e.g., detection and removal of `ssn` field)
-- Errors and exceptions
+Sensitive information must be transmitted using encrypted transport.
 
-Logs must not contain raw PII values, only metadata indicating that redaction occurred.
+AWS service endpoints and client access should use HTTPS/TLS.
 
-### **LM-2 – Access Logging**
-Where possible, S3 access logging (or CloudTrail data events) should be enabled to record who accessed which objects via the Object Lambda Access Point.
+### DP-5 – KMS Least Privilege
 
-### **LM-3 – Alerting (Optional Enhancement)**
-Operational teams should be able to configure alerts for:
+If SSE-KMS is used, key policies and IAM permissions must restrict cryptographic operations to authorized identities and services.
 
-- High failure rates of the Lambda function
-- Unusual spikes in access volume
-- Repeated errors when processing specific objects
+### DP-6 – Temporary Data
 
----
+Transformation logic should minimize unnecessary persistence of sensitive information.
 
-## 5. Application Security
+If temporary processing is required, the design must consider:
 
-### **AS-1 – Input Validation**
-The Lambda function must:
+- Data sensitivity
+- Storage location
+- Encryption
+- Retention
+- Cleanup
+- Access control
 
-- Safely parse JSON input
-- Handle malformed or unexpected payloads without crashing
-- Fail securely when the structure does not match expected JSON
+### DP-7 – Data Classification
 
-### **AS-2 – Defensive Coding**
-The function must:
-
-- Catch and log exceptions
-- Avoid exposing internal stack traces to clients
-- Return clear but non-sensitive error messages
-
-### **AS-3 – Minimal Attack Surface**
-The Lambda function should:
-
-- Use a minimal set of dependencies
-- Avoid unnecessary network access
-- Avoid calling external, non-AWS third-party endpoints as part of the transformation
+Sensitive fields must be identified through an approved data-classification process rather than solely through application-code assumptions.
 
 ---
 
-## 6. Infrastructure & Deployment
+## 4. Transformation Security
 
-### **INF-1 – Immutable Infrastructure via Terraform**
-Infrastructure changes must be applied via Terraform to reduce configuration drift and manual misconfigurations.
+### TS-1 – Input Validation
 
-### **INF-2 – Version Control**
-Terraform configuration and Lambda source code must be stored in version control (e.g., GitHub) with proper commit history.
+Transformation logic must validate incoming content before processing it.
 
-### **INF-3 – Safe Rollback**
-Deployment procedures should support:
+Validation should consider:
 
-- Rolling back to a previous Lambda version
-- Reverting Terraform changes when necessary (e.g., via `terraform destroy` / `terraform apply` with previous plan)
+- Expected data format
+- Expected schema
+- Required fields
+- Unsupported structures
+- Malformed input
+- Size constraints
+
+### TS-2 – Secure Error Handling
+
+Errors must not expose:
+
+- Sensitive values
+- Credentials
+- Internal implementation details
+- Unnecessary stack traces
+
+### TS-3 – Fail-Closed Behavior
+
+When transformation cannot be completed safely, the architecture should deny or fail the request rather than return unmodified sensitive information to an unauthorized consumer.
+
+### TS-4 – Controlled Transformation Rules
+
+Redaction rules should be derived from approved data policies.
+
+Changes to those rules should follow appropriate review and change-control procedures.
+
+### TS-5 – Minimal Dependencies
+
+Transformation code should minimize unnecessary third-party dependencies and external service calls.
+
+Dependencies that are required should be appropriately maintained and reviewed for security risk.
 
 ---
 
-## 7. Compliance Alignment (High-Level)
+## 5. Logging and Monitoring
 
-These security requirements support alignment with:
+### LM-1 – Transformation Logging
 
-- **GDPR** – Data minimization, protection by design, and controlled disclosure of personal data.
-- **PCI DSS** – Rendering sensitive data unreadable and restricting access by business need-to-know.
-- **HIPAA** – Technical safeguards for access control, integrity, and audit logging.
-- **NIST 800-53** – Controls for access enforcement, information sanitization, and auditing.
+Production logging should provide visibility into events such as:
 
-This solution is not a complete compliance program but demonstrates a compliant *pattern* for on-demand redaction of sensitive data in S3.
+- Transformation invocation
+- Successful transformation
+- Transformation failure
+- Invalid input
+- Processing errors
 
+### LM-2 – No PII in Logs
+
+Raw sensitive values must not be written to operational logs.
+
+For example, the system may record that an `ssn` field was removed without recording the SSN itself.
+
+### LM-3 – Data Access Visibility
+
+The production architecture should provide sufficient visibility into access to sensitive source data.
+
+Depending on the implementation, appropriate AWS logging capabilities may include CloudTrail and other supported S3 logging mechanisms.
+
+### LM-4 – Monitoring
+
+Operational monitoring should consider:
+
+- Transformation failure rates
+- Processing latency
+- Request volume
+- Authorization failures
+- Unexpected access patterns
+- Service errors
+
+### LM-5 – Alerting
+
+Security or operational alerts should be considered for conditions such as:
+
+- Repeated transformation failures
+- Significant increases in errors
+- Unexpected raw-data access
+- Unauthorized access attempts
+- Significant changes in request patterns
+
+---
+
+## 6. Access-Path Security
+
+### AP-1 – Prevent Unauthorized Bypass
+
+The security architecture must ensure that consumers intended to receive transformed information cannot bypass the transformation mechanism through another authorized S3 path.
+
+### AP-2 – Administrative Access
+
+Administrative and break-glass access to source data should be explicitly governed and monitored.
+
+### AP-3 – Policy Testing
+
+IAM, bucket, and access-point policies should be tested to verify both:
+
+- Intended access is permitted.
+- Unintended access is denied.
+
+Access control should not be considered effective solely because a policy exists.
+
+---
+
+## 7. Infrastructure and Deployment Security
+
+### INF-1 – Repeatable Deployment
+
+A production implementation should use a controlled and repeatable infrastructure-deployment process.
+
+Infrastructure as Code is preferred where appropriate.
+
+Terraform is one potential implementation approach but is not currently included in this repository.
+
+### INF-2 – Version Control
+
+Infrastructure definitions and transformation source code should be maintained in version control.
+
+### INF-3 – Change Control
+
+Changes affecting:
+
+- IAM
+- Data-access paths
+- Transformation rules
+- Encryption
+- Logging
+- Source-data access
+
+should follow appropriate review and approval processes.
+
+### INF-4 – Rollback
+
+Deployment processes should provide a controlled method for restoring a known-good version when a change causes security or operational problems.
+
+Rollback procedures should be designed carefully so they do not reintroduce an insecure configuration.
+
+---
+
+## 8. Testing Requirements
+
+### TEST-1 – Redaction Testing
+
+Testing must verify that defined sensitive fields are excluded from unauthorized consumer responses.
+
+### TEST-2 – Negative Testing
+
+Testing should verify behavior when:
+
+- Sensitive fields are missing
+- Unexpected fields are present
+- JSON is malformed
+- Input schemas change
+- Transformation fails
+
+### TEST-3 – Authorization Testing
+
+Testing must verify that consumers cannot retrieve sensitive source data through unauthorized access paths.
+
+### TEST-4 – Logging Testing
+
+Testing should confirm that operational logs provide useful information without recording sensitive values.
+
+### TEST-5 – Failure Testing
+
+Failure scenarios should confirm that transformation errors do not result in disclosure of the original sensitive content.
+
+---
+
+## 9. Governance Requirements
+
+### GOV-1 – Data Ownership
+
+Data owners should define which information is sensitive and which consumers are authorized to receive it.
+
+### GOV-2 – Redaction Policy Ownership
+
+Ownership must be established for approving and maintaining transformation policies.
+
+### GOV-3 – Exceptions
+
+Exceptions allowing access to unredacted information should require explicit authorization and appropriate documentation.
+
+### GOV-4 – Periodic Review
+
+Access permissions and transformation policies should be reviewed periodically and when business requirements change.
+
+---
+
+## 10. Compliance Alignment
+
+The architecture can support controls associated with:
+
+- Data minimization
+- Access enforcement
+- Least privilege
+- Information protection
+- Auditability
+- Information sanitization
+- Security by design
+
+These concepts may be relevant to frameworks and regulatory requirements including:
+
+- GDPR
+- PCI DSS
+- HIPAA Security Rule
+- NIST SP 800-53
+- ISO/IEC 27001
+
+Use of this architecture does not establish compliance by itself.
+
+Compliance depends on regulatory scope, data classification, complete implementation, organizational processes, testing, and demonstrated control effectiveness.
+
+---
+
+## Security Architecture Principle
+
+The primary security control is not the Lambda function by itself.
+
+The protection model depends on the combination of:
+
+**Data classification + authorization + controlled access paths + transformation + encryption + monitoring + governance**
+
+The transformation function enforces one part of the policy: removing information that the consumer is not authorized or required to receive.
+
+The surrounding architecture must ensure that the consumer cannot simply bypass that control and retrieve the sensitive source data another way.
